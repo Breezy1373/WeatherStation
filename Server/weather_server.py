@@ -1,4 +1,5 @@
 import sqlite3
+import paho.mqtt.client as mqtt
 from flask import Flask, render_template
 
 
@@ -17,3 +18,8 @@ def index():
     # posts = conn.execute('SELECT * FROM posts').fetchall()
     conn.close()
     return render_template('index.html')
+
+
+if __name__ == '__main__':
+
+    app.run(host='0.0.0.0', port=5000)

@@ -3,6 +3,8 @@ DROP TABLE IF EXISTS posts;
 CREATE TABLE posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL
+    temperature REAL NOT NULL,
+    humidity REAL NOT NULL,
+    pressure REAL NOT NULL,
+    windspeed REAL NOT NULL
 );
