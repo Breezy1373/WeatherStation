@@ -1,19 +1,9 @@
 
-
-
-
-
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <Ticker.h>
-
-#define BME_SCK 14
-#define BME_MISO 12
-#define BME_MOSI 13
-#define BME_CS 15*/
-#define SEALEVELPRESSURE_HPA (1013.25)
 
 // OTA 
 #include <ESP8266WiFi.h>
@@ -25,6 +15,23 @@
 #include <ESP8266WebServer.h>
 
 ESP8266WebServer server(80);  
+
+#include <PubSubClient.h>
+
+const char* mqttServer = "192.168.8.32";
+const int mqttPort = 1883;
+const char* mqttUser = "weatherstation";
+const char* mqttPassword = "windy";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// BME280 setup
+#define BME_SCK 14
+#define BME_MISO 12
+#define BME_MOSI 13
+#define BME_CS 15*/
+#define SEALEVELPRESSURE_HPA (1013.25)
 
 //Timer
 Ticker timer;
@@ -52,7 +59,7 @@ int ALTITUDE = 2367; //Meters in elevation for Estes Park
 void ICACHE_RAM_ATTR rps_fan();
 void ICACHE_RAM_ATTR onTime();
 
-// Debounceing code
+// Debouncing code
 long debouncing_time = 15; //Debouncing Time in Milliseconds
 volatile unsigned long last_micros;
 
@@ -93,18 +100,38 @@ void setup() {
     ESP.restart();
   }
 
+  client.setServer(mqttServer, mqttPort);
+  client.setCallback(callback);
+
+  while (!client.connected()) {
+    Serial.println("Connecting to MQTT...");
+
+    if (client.connect("weather", mqttUser, mqttPassword )) {
+
+      Serial.println("connected");
+      // Subscribe
+      client.subscribe("weather/temperature");
+
+    } else {
+
+      Serial.print("failed with state ");
+      Serial.print(client.state());
+      delay(2000);
+
+    }
+  }
   ArduinoOTA.onStart([]() {
     Serial.println("Start");
   });
-  
+
   ArduinoOTA.onEnd([]() {
     Serial.println("\nEnd");
   });
-  
+
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
   });
-  
+
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
@@ -113,9 +140,9 @@ void setup() {
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
     else if (error == OTA_END_ERROR) Serial.println("End Failed");
   });
-  
+
   ArduinoOTA.begin();
-  
+
   Serial.println("Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
@@ -125,8 +152,8 @@ void setup() {
 
   server.begin();
   Serial.println("HTTP server started");
-}  
-    
+}
+
 // executed every time the interrupt 0 (pin2) gets low, ie one rev of cups.
 void rps_fan() {
   // Check for debouncing, if not too fast count rev
@@ -148,9 +175,40 @@ void onTime() {
   timer1_write(5000000);//12us
 }
 
+// MQTT callback
+void callback(char* topic, byte* payload, unsigned int length) {
 
+  Serial.print("Message arrived in topic: ");
+  Serial.println(topic);
 
-void loop() {  
+  Serial.print("Message:");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+
+  Serial.println();
+  Serial.println("-----------------------");
+
+}
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("weather")) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void loop() {
   ArduinoOTA.handle();
 
   server.handleClient();
@@ -162,9 +220,9 @@ void loop() {
 
   // Record Max wind speed
   if (mph > maxMph) {
-    maxMph = mph;        
+    maxMph = mph;
   }
-  
+
   c_temp = bme.readTemperature();
   temperature = (c_temp * 9 / 5) + 32;
   humidity = bme.readHumidity();
@@ -174,8 +232,32 @@ void loop() {
   m_altitude = bme.readAltitude(SEALEVELPRESSURE_HPA);
   altitude = m_altitude * 3.281;
 
-  delay(1000);
-  
+  // Check if we're connected to the MQTT broker
+  if (!client.connected()) {
+    // If we're not, attempt to reconnect
+    reconnect();
+  }
+  client.loop();
+
+  // Convert the value to a char array
+  char tempString[8];
+  dtostrf(temperature, 1, 2, tempString);
+  client.publish("weather/temperature", tempString);
+
+  char humString[8];
+  dtostrf(humidity, 1, 2, humString);
+  client.publish("weather/humidity", humString);
+
+  char pressString[8];
+  dtostrf(pressure, 1, 2, pressString);
+  client.publish("weather/pressure", pressString);
+
+  char windString[8];
+  dtostrf(mph, 1, 2, windString);
+  client.publish("weather/wind", windString);
+
+  delay(5000);
+
 }
 
 
