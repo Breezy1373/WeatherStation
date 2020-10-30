@@ -1,19 +1,9 @@
 
-
-
-
-
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <Ticker.h>
-
-#define BME_SCK 14
-#define BME_MISO 12
-#define BME_MOSI 13
-#define BME_CS 15*/
-#define SEALEVELPRESSURE_HPA (1013.25)
 
 // OTA 
 #include <ESP8266WiFi.h>
@@ -25,6 +15,25 @@
 #include <ESP8266WebServer.h>
 
 ESP8266WebServer server(80);  
+
+#include <PubSubClient.h>
+
+const char* mqttServer = "192.168.8.32";
+const int mqttPort = 1883;
+const char* mqttUser = "weatherstation";
+const char* mqttPassword = "windy";
+volatile int mqtt_pubish_seconds = 0;
+volatile int max_wind_seconds = 0;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// BME280 setup
+#define BME_SCK 14
+#define BME_MISO 12
+#define BME_MOSI 13
+#define BME_CS 15*/
+#define SEALEVELPRESSURE_HPA (1013.25)
 
 //Timer
 Ticker timer;
@@ -52,20 +61,20 @@ int ALTITUDE = 2367; //Meters in elevation for Estes Park
 void ICACHE_RAM_ATTR rps_fan();
 void ICACHE_RAM_ATTR onTime();
 
-// Debounceing code
+// Debouncing code
 long debouncing_time = 15; //Debouncing Time in Milliseconds
 volatile unsigned long last_micros;
 
-void setup() {  
+void setup() {
   Serial.begin(9600);
-  
+
   bool status;
-  status = bme.begin(0x76);  
+  status = bme.begin(0x76);
   if (!status) {
     Serial.println("Could not find a valid BME280 sensor, check wiring!");
     while (1);
   }
-  
+
   //Initialize Ticker every 0.5s
   timer1_attachInterrupt(onTime); // Add ISR Function
   timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
@@ -77,13 +86,13 @@ void setup() {
     TIM_SINGLE  0 //on interrupt routine you need to write a new value to start the timer again
     TIM_LOOP  1 //on interrupt the counter will start with the same value again
   */
-  
+
   // Arm the Timer for our 5s Interval
-  timer1_write(5000000); // 5000000 / 1 second - 5 ticks per us from TIM_DIV16 == 500,000 us interval 
-  
+  timer1_write(5000000); // 5000000 / 1 second - 5 ticks per us from TIM_DIV16 == 500,000 us interval
+
   pinMode(14, INPUT);
   attachInterrupt(digitalPinToInterrupt(14), rps_fan, FALLING);
-  
+
   Serial.println("Booting");
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
@@ -93,18 +102,32 @@ void setup() {
     ESP.restart();
   }
 
+  client.setServer(mqttServer, mqttPort);
+
+  while (!client.connected()) {
+    Serial.println("Connecting to MQTT...");
+
+    if (client.connect("weather", mqttUser, mqttPassword )) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed with state ");
+      Serial.print(client.state());
+      delay(2000);
+
+    }
+  }
   ArduinoOTA.onStart([]() {
     Serial.println("Start");
   });
-  
+
   ArduinoOTA.onEnd([]() {
     Serial.println("\nEnd");
   });
-  
+
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
   });
-  
+
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
@@ -113,9 +136,9 @@ void setup() {
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
     else if (error == OTA_END_ERROR) Serial.println("End Failed");
   });
-  
+
   ArduinoOTA.begin();
-  
+
   Serial.println("Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
@@ -125,8 +148,8 @@ void setup() {
 
   server.begin();
   Serial.println("HTTP server started");
-}  
-    
+}
+
 // executed every time the interrupt 0 (pin2) gets low, ie one rev of cups.
 void rps_fan() {
   // Check for debouncing, if not too fast count rev
@@ -139,18 +162,69 @@ void rps_fan() {
 // ISR to Fire when Timer is triggered
 void onTime() {
   seconds++;
+  mqtt_pubish_seconds++;
+  mqtt_pubish_seconds++;
+
   if (seconds == 5) { //make 5 for each output
     seconds = 0;
     rps = revolutions; //revolutions per second
     revolutions = 0;
   }
+
+  // Only publish every 5 minutes
+  if (mqtt_pubish_seconds == 300) {
+    // Convert the value to a char array
+    char tempString[8];
+    dtostrf(temperature, 1, 2, tempString);
+    client.publish("weather/temperature", tempString);
+
+    char humString[8];
+    dtostrf(humidity, 1, 2, humString);
+    client.publish("weather/humidity", humString);
+
+    char pressString[8];
+    dtostrf(pressure, 1, 2, pressString);
+    client.publish("weather/pressure", pressString);
+
+    char windString[8];
+    dtostrf(mph, 1, 2, windString);
+    client.publish("weather/wind", windString);
+
+    char maxWindString[8];
+    dtostrf(maxMph, 1, 2, maxWindString);
+    client.publish("weather/maxwind", maxWindString);
+
+    mqtt_pubish_seconds = 0;
+  }
+
+  // Reset Max wind speed every 24 hours
+  if (max_wind_seconds == 86400) {
+    max_wind_seconds = 0;
+    maxMph = 0;
+  }
+
   // Re-Arm the timer as using TIM_SINGLE
   timer1_write(5000000);//12us
 }
 
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("weather")) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
 
-
-void loop() {  
+void loop() {
   ArduinoOTA.handle();
 
   server.handleClient();
@@ -162,9 +236,9 @@ void loop() {
 
   // Record Max wind speed
   if (mph > maxMph) {
-    maxMph = mph;        
+    maxMph = mph;
   }
-  
+
   c_temp = bme.readTemperature();
   temperature = (c_temp * 9 / 5) + 32;
   humidity = bme.readHumidity();
@@ -174,8 +248,15 @@ void loop() {
   m_altitude = bme.readAltitude(SEALEVELPRESSURE_HPA);
   altitude = m_altitude * 3.281;
 
+  // Check if we're connected to the MQTT broker
+  if (!client.connected()) {
+    // If we're not, attempt to reconnect
+    reconnect();
+  }
+  client.loop();
+
   delay(1000);
-  
+
 }
 
 

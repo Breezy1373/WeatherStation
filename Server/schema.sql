@@ -6,5 +6,6 @@ CREATE TABLE posts (
     temperature REAL NOT NULL,
     humidity REAL NOT NULL,
     pressure REAL NOT NULL,
-    windspeed REAL NOT NULL
+    windspeed REAL NOT NULL,
+    maxwindspeed REAL NOT NULL
 );
